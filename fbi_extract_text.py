@@ -174,6 +174,13 @@ def main():
             print(f"\n{'='*80}")
             print(f"Processing article {i + 1}/{len(urls_to_process)} (Row {idx + 1}): {url}")
             
+            # Skip video or MP4 links
+            if ".mp4" in url.lower() or "video-repository" in url.lower():
+                print(f"  ⏭️  Skipping video/MP4 link")
+                df_links.at[idx, 'text'] = 'SKIPPED_VIDEO_LINK'
+                print(f"  ✅ Marked as skipped in row {idx + 1}")
+                continue
+            
             # Human-like delay between articles
             if i > 0:
                 delay = random.uniform(10, 20)  # 10-20 seconds between articles
@@ -215,20 +222,22 @@ def main():
         
         # Calculate statistics
         total_processed = len(urls_to_process)
-        total_with_text = len(df_links[df_links['text'].notna() & (df_links['text'] != '') & (df_links['text'] != 'FAILED_TO_SCRAPE')])
+        total_with_text = len(df_links[df_links['text'].notna() & (df_links['text'] != '') & (df_links['text'] != 'FAILED_TO_SCRAPE') & (df_links['text'] != 'SKIPPED_VIDEO_LINK')])
         total_failed = len(df_links[df_links['text'] == 'FAILED_TO_SCRAPE'])
+        total_skipped = len(df_links[df_links['text'] == 'SKIPPED_VIDEO_LINK'])
         total_empty = len(df_links[(df_links['text'].isna()) | (df_links['text'] == '')])
         
         print(f"   - Articles processed this session: {total_processed}")
         print(f"   - Successfully scraped this session: {successful_scrapes}")
         print(f"   - Total articles with text: {total_with_text}")
         print(f"   - Total failed scrapes: {total_failed}")
+        print(f"   - Total skipped (video/MP4): {total_skipped}")
         print(f"   - Total empty/pending: {total_empty}")
         print(f"   - Overall success rate: {total_with_text/len(df_links)*100:.1f}%")
         print(f"💾 Updated CSV saved to: {args.input_file}")
         
         # Show sample of extracted content
-        successful_content = df_links[(df_links['text'].notna()) & (df_links['text'] != '') & (df_links['text'] != 'FAILED_TO_SCRAPE')]
+        successful_content = df_links[(df_links['text'].notna()) & (df_links['text'] != '') & (df_links['text'] != 'FAILED_TO_SCRAPE') & (df_links['text'] != 'SKIPPED_VIDEO_LINK')]
         if len(successful_content) > 0:
             avg_length = successful_content['text'].str.len().mean()
             print(f"📝 Average content length: {avg_length:.0f} characters")
