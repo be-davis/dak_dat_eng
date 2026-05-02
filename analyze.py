@@ -27,6 +27,7 @@ app_list = [
     "Tellonym", "TextNow", "TextPlus", "Threema", "VRChat", "Wattpad", "Wishbone",
     "Yellow", "Zello", "Zepeto", "X.com"
 ]
+#%%
 def get_app_columns(df):
     """
     Get all column names that start with 'app_' from a DataFrame.
@@ -78,36 +79,69 @@ app_column_names = [f"app_{re.sub(r'[^a-zA-Z0-9]', '_', app)}" for app in app_li
 
 def extract_victim_ages(text):
     if pd.isna(text):
-        return []
+        return np.nan
     text = str(text)
-    ages = set()
+    ages = []
     
-    # Match patterns like "5-year-old", "12-year-old"
-    matches = re.findall(r'(\d+)-year-old', text, re.IGNORECASE)
-    ages.update(matches)
+    # Match patterns like "5-year-old", "12-year-old" but only for reasonable child ages (1-17)
+    # Also add context words to avoid matching offender ages
+    matches = re.findall(r'(?:victim|child|girl|boy|minor|juvenile).*?(\d{1,2})-year-old|(\d{1,2})-year-old\s+(?:victim|child|girl|boy|minor|juvenile)', text, re.IGNORECASE)
+    for match in matches:
+        age = int(match[0] if match[0] else match[1])
+        if age <= 17:  # Only include ages 17 and under
+            ages.append(age)
+    
+    # Also match standalone X-year-old patterns but limit to 1-17 years
+    matches = re.findall(r'(\d{1,2})-year-old', text, re.IGNORECASE)
+    for match in matches:
+        age = int(match)
+        if age <= 17:  # Only include ages 17 and under
+            ages.append(age)
     
     # Match "children ages 5 and 8", "child age 12", etc. - more specific context
     matches = re.findall(r'(?:child(?:ren)?\s+age[sd]?\s+|ages?\s+)(\d{1,2})', text, re.IGNORECASE)
-    ages.update(matches)
+    for match in matches:
+        age = int(match)
+        if age <= 17:
+            ages.append(age)
     
     # Match "under the age of X", "child under X"
     matches = re.findall(r'(?:under\s+(?:the\s+)?age\s+of|child\s+under)\s+(\d{1,2})', text, re.IGNORECASE)
-    ages.update(matches)
+    for match in matches:
+        age = int(match)
+        if age <= 17:
+            ages.append(age)
     
-    # Match age ranges like "between 5 and 8"
+    # Match age ranges like "between 5 and 8" - take the midpoint, only if both ages are child ages
     matches = re.findall(r'between\s+(\d{1,2})\s+and\s+(\d{1,2})', text, re.IGNORECASE)
     for low, high in matches:
-        ages.add(f"{low}-{high}")
+        low_age, high_age = int(low), int(high)
+        if low_age <= 17 and high_age <= 17:  # Only if both ages are child ages
+            midpoint = (low_age + high_age) / 2
+            ages.append(midpoint)
     
     # Match specific victim age contexts
     matches = re.findall(r'(?:victims?\s+age[sd]?\s+|minors?\s+age[sd]?\s+)(\d{1,2})', text, re.IGNORECASE)
-    ages.update(matches)
+    for match in matches:
+        age = int(match)
+        if age <= 17:
+            ages.append(age)
     
-    if re.search(r'\btoddler|infant|prepubescent\b', text, re.IGNORECASE):
-        ages.add("toddler/infant/prepubescent")
-    return list(ages)
+    # Handle toddler/infant/prepubescent - assign reasonable average ages
+    if re.search(r'\btoddler\b', text, re.IGNORECASE):
+        ages.append(2)  # Average toddler age
+    if re.search(r'\binfant\b', text, re.IGNORECASE):
+        ages.append(1)  # Average infant age
+    if re.search(r'\bprepubescent\b', text, re.IGNORECASE):
+        ages.append(8)  # Average prepubescent age
+    
+    # Return mean of ages or NaN if no ages found
+    if ages:
+        return np.mean(ages)
+    else:
+        return np.nan
 
-df['extracted_victim_ages'] = df['text'].apply(extract_victim_ages)
+df['victim_age'] = df['text'].apply(extract_victim_ages)
 
 def extract_offender_age(text):
     if pd.isna(text):
@@ -313,36 +347,60 @@ df['field_office_slug'] = df['URL'].apply(lambda x: re.search(r'field-offices/([
 
 # Save enriched dataframe
 df.to_csv('enriched_grok_df.csv', index=True)
-
-# Analysis: Top 3 most commonly mentioned apps by victim gender
-print("=== TOP 3 MOST COMMONLY MENTIONED APPS BY VICTIM GENDER ===\n")
-
-# Group by victim_gender and sum app columns
-app_by_gender = df.groupby('victim_gender')[app_column_names].sum()
-
-# Get top 3 apps for each gender
-for gender in app_by_gender.index:
-    print(f"VICTIM GENDER: {gender.upper()}")
-    print("-" * 40)
-    
-    # Get the app counts for this gender and sort in descending order
-    gender_apps = app_by_gender.loc[gender].sort_values(ascending=False)
-    
-    # Get top 3 non-zero apps
-    top_apps = gender_apps[gender_apps > 0].head(3)
-    
-    if len(top_apps) > 0:
-        for i, (app_col, count) in enumerate(top_apps.items(), 1):
-            # Clean up the app name (remove 'app_' prefix and replace underscores)
-            app_name = app_col.replace('app_', '').replace('_', ' ').title()
-            print(f"{i}. {app_name}: {int(count)} mentions")
-    else:
-        print("No apps mentioned for this gender category")
-    
-    print()
-
-# Also show the raw grouped data for reference
-print("=== RAW GROUPED DATA (All Apps) ===")
-print(app_by_gender.T.sort_values(by=list(app_by_gender.index), ascending=False))
-
 #%%
+def analyze_top_apps_by_group(df, app_column_names, group_by_column, top_n=3):
+    """
+    Analyze and display the top N most commonly mentioned apps grouped by any specified column.
+    
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        DataFrame containing the case data with the grouping column and app columns
+    app_column_names : list
+        List of column names that contain app mention data (boolean columns starting with 'app_')
+    group_by_column : str
+        Name of the column to group by (e.g., 'victim_gender', 'extracted_cities', 'field_office_slug')
+    top_n : int, default 3
+        Number of top apps to display for each group category
+    
+    Returns:
+    --------
+    pd.DataFrame
+        Grouped data showing app counts by the specified grouping column
+    """
+    print(f"=== TOP {top_n} MOST COMMONLY MENTIONED APPS BY {group_by_column.upper()} ===\n")
+    
+    # Group by specified column and sum app columns
+    app_by_group = df.groupby(group_by_column)[app_column_names].sum()
+    
+    # Get top N apps for each group
+    for group_value in app_by_group.index:
+        print(f"{group_by_column.upper()}: {str(group_value).upper()}")
+        print("-" * 50)
+        
+        # Get the app counts for this group and sort in descending order
+        group_apps = app_by_group.loc[group_value].sort_values(ascending=False)
+        
+        # Get top N non-zero apps
+        top_apps = group_apps[group_apps > 0].head(top_n)
+        
+        if len(top_apps) > 0:
+            for i, (app_col, count) in enumerate(top_apps.items(), 1):
+                # Clean up the app name (remove 'app_' prefix and replace underscores)
+                app_name = app_col.replace('app_', '').replace('_', ' ').title()
+                print(f"{i}. {app_name}: {int(count)} mentions")
+        else:
+            print(f"No apps mentioned for this {group_by_column} category")
+        
+        print()
+    
+    # Also show the raw grouped data for reference
+    print("=== RAW GROUPED DATA (All Apps) ===")
+    print(app_by_group.T.sort_values(by=list(app_by_group.index), ascending=False))
+    
+    return app_by_group
+#%%
+# Run the analysis - group by victim gender
+analyze_top_apps_by_group(df, app_column_names, 'victim_age')
+
+#%%  a    x  b2q   a WQNQ3DV 

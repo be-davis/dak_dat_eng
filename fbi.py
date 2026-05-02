@@ -126,4 +126,8 @@ if __name__ == '__main__':
     print(f"Starting scrape from page {args.start_page} for {args.approx_num_pages} pages")
     print(f"Total page range: {args.start_page} to {args.start_page + args.approx_num_pages - 1}")
     
+
     get_all_links(start_page=args.start_page, approx_num_pages=args.approx_num_pages)
+
+
+            
